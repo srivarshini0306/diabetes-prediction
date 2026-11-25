@@ -1,15 +1,12 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 from pathlib import Path
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
-
 from sklearn.pipeline import Pipeline
 
 from sklearn.linear_model import LogisticRegression
@@ -25,12 +22,10 @@ from sklearn.metrics import (
     recall_score,
     f1_score,
     roc_auc_score,
-    confusion_matrix,
-    classification_report
+    confusion_matrix
 )
 
 import warnings
-
 warnings.filterwarnings("ignore")
 
 
@@ -39,75 +34,10 @@ warnings.filterwarnings("ignore")
 # ============================================================
 
 st.set_page_config(
-    page_title="Diabetes Prediction | Predictive Analytics",
+    page_title="Diabetes Prediction",
     page_icon="🩺",
     layout="wide"
 )
-
-
-# ============================================================
-# CUSTOM CSS
-# ============================================================
-
-st.markdown("""
-<style>
-
-    .main {
-        background-color: #f8fafc;
-    }
-
-    .block-container {
-        padding-top: 2rem;
-        padding-bottom: 3rem;
-    }
-
-    .title {
-        font-size: 42px;
-        font-weight: 700;
-        text-align: center;
-        color: #172033;
-    }
-
-    .subtitle {
-        text-align: center;
-        font-size: 18px;
-        color: #64748b;
-        margin-bottom: 30px;
-    }
-
-    .section-title {
-        font-size: 28px;
-        font-weight: 650;
-        color: #172033;
-        margin-top: 20px;
-        margin-bottom: 15px;
-    }
-
-    .info-box {
-        padding: 20px;
-        border-radius: 15px;
-        background-color: #ffffff;
-        border: 1px solid #e2e8f0;
-    }
-
-    .positive {
-        padding: 25px;
-        border-radius: 15px;
-        text-align: center;
-        background-color: #fee2e2;
-        border: 1px solid #fecaca;
-    }
-
-    .negative {
-        padding: 25px;
-        border-radius: 15px;
-        text-align: center;
-        background-color: #dcfce7;
-        border: 1px solid #bbf7d0;
-    }
-
-</style>
-""", unsafe_allow_html=True)
 
 
 # ============================================================
@@ -127,7 +57,6 @@ FEATURES = [
 
 TARGET = "Outcome"
 
-# Selected feature set used in the project
 SELECTED_FEATURES = [
     "Glucose",
     "BMI",
@@ -136,27 +65,68 @@ SELECTED_FEATURES = [
     "DiabetesPedigreeFunction"
 ]
 
+ZERO_AS_MISSING = [
+    "Glucose",
+    "BloodPressure",
+    "SkinThickness",
+    "Insulin",
+    "BMI"
+]
+
 RANDOM_STATE = 42
+
+
+# ============================================================
+# CUSTOM CSS
+# ============================================================
+
+st.markdown("""
+<style>
+
+.main {
+    background-color: #f8fafc;
+}
+
+.block-container {
+    padding-top: 2rem;
+}
+
+.title {
+    font-size: 40px;
+    font-weight: 700;
+    text-align: center;
+}
+
+.subtitle {
+    text-align: center;
+    color: #64748b;
+    font-size: 18px;
+}
+
+</style>
+""", unsafe_allow_html=True)
 
 
 # ============================================================
 # FIND DATASET
 # ============================================================
 
-def find_dataset():
+BASE_DIR = Path(__file__).resolve().parent
 
-    base_dir = Path(__file__).resolve().parent
+cleaned_file = BASE_DIR / "diabetes_cleaned.csv"
+original_file = BASE_DIR / "diabetes.csv"
 
-    possible_files = [
-        base_dir / "diabetes_cleaned.csv",
-        base_dir / "diabetes.csv"
-    ]
 
-    for file in possible_files:
-        if file.exists():
-            return file
-
-    return None
+if cleaned_file.exists():
+    DATA_FILE = cleaned_file
+elif original_file.exists():
+    DATA_FILE = original_file
+else:
+    st.error(
+        "❌ Dataset not found. Make sure diabetes_cleaned.csv "
+        "or diabetes.csv is in the same folder as app.py."
+    )
+    st.stop()
 
 
 # ============================================================
@@ -166,44 +136,18 @@ def find_dataset():
 @st.cache_data
 def load_data():
 
-    file_path = find_dataset()
+    data = pd.read_csv(DATA_FILE)
 
-    if file_path is None:
-        return None
+    data.columns = data.columns.str.strip()
 
-    df = pd.read_csv(file_path)
-
-    return df
+    return data
 
 
 df = load_data()
 
 
 # ============================================================
-# CHECK DATASET
-# ============================================================
-
-if df is None:
-
-    st.error("❌ Diabetes dataset not found.")
-
-    st.info("""
-    Make sure `diabetes_cleaned.csv` or `diabetes.csv`
-    is present in the same GitHub folder as `app.py`.
-    """)
-
-    st.stop()
-
-
-# ============================================================
-# CLEAN COLUMN NAMES
-# ============================================================
-
-df.columns = df.columns.str.strip()
-
-
-# ============================================================
-# BASIC VALIDATION
+# VALIDATE DATA
 # ============================================================
 
 required_columns = FEATURES + [TARGET]
@@ -216,67 +160,40 @@ missing_columns = [
 if missing_columns:
 
     st.error(
-        f"Missing columns in dataset: {missing_columns}"
+        f"Missing columns: {missing_columns}"
     )
 
     st.stop()
 
 
 # ============================================================
-# HANDLE ZERO VALUES AS MISSING
+# PREPROCESS DATA
 # ============================================================
 
-ZERO_AS_MISSING = [
-    "Glucose",
-    "BloodPressure",
-    "SkinThickness",
-    "Insulin",
-    "BMI"
-]
+@st.cache_data
+def prepare_data(data):
 
-df_model = df.copy()
+    data = data.copy()
 
-for column in ZERO_AS_MISSING:
+    # Replace invalid zero values with NaN
+    for col in ZERO_AS_MISSING:
+        data[col] = data[col].replace(0, np.nan)
 
-    df_model[column] = df_model[column].replace(
-        0,
-        np.nan
+    # Median imputation
+    imputer = SimpleImputer(strategy="median")
+
+    data[FEATURES] = imputer.fit_transform(
+        data[FEATURES]
     )
 
+    return data
 
-# ============================================================
-# MEDIAN IMPUTATION
-# ============================================================
 
-imputer = SimpleImputer(
-    strategy="median"
-)
-
-df_model[FEATURES] = imputer.fit_transform(
-    df_model[FEATURES]
-)
+df_model = prepare_data(df)
 
 
 # ============================================================
-# PAGE NAVIGATION
-# ============================================================
-
-st.sidebar.title("🩺 Diabetes Prediction")
-
-page = st.sidebar.radio(
-    "Navigation",
-    [
-        "🏠 Home",
-        "🔬 Data Analysis",
-        "📊 Model Comparison",
-        "🧪 Diabetes Prediction",
-        "ℹ️ About Project"
-    ]
-)
-
-
-# ============================================================
-# MODEL DEFINITIONS
+# MODELS
 # ============================================================
 
 def get_models():
@@ -317,14 +234,14 @@ def get_models():
 
 
 # ============================================================
-# MODEL TRAINING
+# MODEL COMPARISON
 # ============================================================
 
 @st.cache_data
 def run_model_comparison(data):
 
-    X = data[FEATURES].copy()
-    y = data[TARGET].copy()
+    X = data[FEATURES]
+    y = data[TARGET]
 
     X_train, X_test, y_train, y_test = train_test_split(
         X,
@@ -373,7 +290,7 @@ def run_model_comparison(data):
                 X_test[feature_list]
             )
 
-            y_probability = pipeline.predict_proba(
+            y_prob = pipeline.predict_proba(
                 X_test[feature_list]
             )[:, 1]
 
@@ -402,10 +319,9 @@ def run_model_comparison(data):
 
             roc_auc = roc_auc_score(
                 y_test,
-                y_probability
+                y_prob
             )
 
-            # Composite score
             candidate_score = np.mean([
                 accuracy,
                 precision,
@@ -448,10 +364,8 @@ def run_model_comparison(data):
             )
 
             trained_models[key] = {
-                "pipeline": pipeline,
-                "features": feature_list,
-                "X_test": X_test[feature_list],
-                "y_test": y_test
+                "model": pipeline,
+                "features": feature_list
             }
 
     results_df = pd.DataFrame(results)
@@ -464,17 +378,31 @@ def run_model_comparison(data):
     return results_df, trained_models
 
 
-# ============================================================
-# RUN MODELS
-# ============================================================
-
 results_df, trained_models = run_model_comparison(
     df_model
 )
 
 
 # ============================================================
-# HOME PAGE
+# SIDEBAR
+# ============================================================
+
+st.sidebar.title("🩺 Diabetes Prediction")
+
+page = st.sidebar.radio(
+    "Navigation",
+    [
+        "🏠 Home",
+        "🔬 Data Analysis",
+        "📊 Model Comparison",
+        "🧪 Diabetes Prediction",
+        "ℹ️ About Project"
+    ]
+)
+
+
+# ============================================================
+# HOME
 # ============================================================
 
 if page == "🏠 Home":
@@ -495,142 +423,95 @@ if page == "🏠 Home":
 
     st.divider()
 
-    st.markdown(
-        '<div class="section-title">'
-        'Project Overview'
-        '</div>',
-        unsafe_allow_html=True
-    )
+    st.subheader("Project Overview")
 
     st.write("""
-    This project develops a machine learning based predictive
-    analytics system for diabetes prediction.
+    This project applies predictive analytics and machine
+    learning techniques to predict diabetes outcomes.
 
-    The workflow includes dataset understanding, data cleaning,
-    exploratory data analysis, correlation analysis,
-    multicollinearity analysis, feature selection, preprocessing,
-    model development and comparative evaluation.
+    The complete workflow includes:
+
+    • Data Understanding  
+    • Data Cleaning  
+    • Missing Value Treatment  
+    • Exploratory Data Analysis  
+    • Correlation Analysis  
+    • Multicollinearity Analysis  
+    • Feature Selection  
+    • Feature Scaling  
+    • Model Development  
+    • Comparative Model Evaluation  
+    • Final Model Selection  
+    • Diabetes Prediction
     """)
 
     st.divider()
-
-    # Dataset metrics
 
     c1, c2, c3, c4 = st.columns(4)
 
-    with c1:
+    c1.metric(
+        "Dataset Records",
+        len(df)
+    )
 
-        st.metric(
-            "Dataset Records",
-            len(df)
-        )
+    c2.metric(
+        "Input Features",
+        len(FEATURES)
+    )
 
-    with c2:
+    c3.metric(
+        "Selected Features",
+        len(SELECTED_FEATURES)
+    )
 
-        st.metric(
-            "Input Features",
-            len(FEATURES)
-        )
-
-    with c3:
-
-        st.metric(
-            "Selected Features",
-            len(SELECTED_FEATURES)
-        )
-
-    with c4:
-
-        st.metric(
-            "ML Experiments",
-            len(results_df)
-        )
+    c4.metric(
+        "Model Experiments",
+        len(results_df)
+    )
 
     st.divider()
 
-    st.markdown(
-        '<div class="section-title">'
-        'Project Workflow'
-        '</div>',
-        unsafe_allow_html=True
+    st.subheader("Best Model")
+
+    best = results_df.iloc[0]
+
+    c1, c2, c3 = st.columns(3)
+
+    c1.metric(
+        "Algorithm",
+        best["Algorithm"]
     )
 
-    st.markdown("""
-    **Dataset Understanding**
+    c2.metric(
+        "Feature Set",
+        best["Feature Set"]
+    )
 
-    ↓
-
-    **Data Cleaning**
-
-    ↓
-
-    **Handling Missing / Invalid Values**
-
-    ↓
-
-    **Exploratory Data Analysis**
-
-    ↓
-
-    **Correlation Analysis**
-
-    ↓
-
-    **Multicollinearity Analysis**
-
-    ↓
-
-    **Feature Selection**
-
-    ↓
-
-    **Feature Scaling**
-
-    ↓
-
-    **Multiple Machine Learning Models**
-
-    ↓
-
-    **All Features vs Selected Features**
-
-    ↓
-
-    **Comparative Evaluation**
-
-    ↓
-
-    **Final Model Selection**
-
-    ↓
-
-    **Diabetes Prediction**
-    """)
+    c3.metric(
+        "Candidate Score",
+        f"{best['Candidate Score'] * 100:.2f}%"
+    )
 
     st.success(
-        "The application evaluates multiple models before making predictions."
+        f"🏆 Best experiment: {best['Algorithm']} "
+        f"using {best['Feature Set']}."
     )
 
     st.warning(
-        "⚠️ This application is an academic predictive analytics "
-        "prototype and is not a medical diagnostic system."
+        "⚠️ This application is for academic demonstration "
+        "and is not a medical diagnostic system."
     )
 
 
 # ============================================================
-# DATA ANALYSIS PAGE
+# DATA ANALYSIS
 # ============================================================
 
 elif page == "🔬 Data Analysis":
 
-    st.markdown(
-        '<div class="section-title">'
-        '🔬 Exploratory & Feature Analysis'
-        '</div>',
-        unsafe_allow_html=True
-    )
+    st.title("🔬 Data Analysis")
 
-    tabs = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         "Dataset",
         "Statistics",
         "Correlation",
@@ -641,7 +522,7 @@ elif page == "🔬 Data Analysis":
     # DATASET
     # --------------------------------------------------------
 
-    with tabs[0]:
+    with tab1:
 
         st.subheader("Dataset Preview")
 
@@ -650,58 +531,42 @@ elif page == "🔬 Data Analysis":
             use_container_width=True
         )
 
-        st.subheader("Dataset Shape")
-
         st.write(
-            f"Rows: **{df.shape[0]}**  |  "
-            f"Columns: **{df.shape[1]}**"
+            f"Dataset shape: **{df.shape[0]} rows × "
+            f"{df.shape[1]} columns**"
         )
 
         st.subheader("Target Distribution")
 
-        outcome_counts = df[TARGET].value_counts()
+        target_counts = (
+            df[TARGET]
+            .value_counts()
+            .rename({
+                0: "Non-Diabetic",
+                1: "Diabetic"
+            })
+        )
 
-        col1, col2 = st.columns(2)
-
-        with col1:
-
-            st.dataframe(
-                outcome_counts.rename(
-                    index={
-                        0: "Non-Diabetic",
-                        1: "Diabetic"
-                    }
-                )
-            )
-
-        with col2:
-
-            fig, ax = plt.subplots()
-
-            ax.bar(
-                ["Non-Diabetic", "Diabetic"],
-                outcome_counts.values
-            )
-
-            ax.set_ylabel("Number of Records")
-
-            st.pyplot(fig)
-
+        st.bar_chart(target_counts)
 
     # --------------------------------------------------------
     # STATISTICS
     # --------------------------------------------------------
 
-    with tabs[1]:
+    with tab2:
 
-        st.subheader("Descriptive Statistics")
+        st.subheader(
+            "Descriptive Statistics"
+        )
 
         st.dataframe(
             df[FEATURES].describe().T,
             use_container_width=True
         )
 
-        st.subheader("Missing / Zero Values")
+        st.subheader(
+            "Zero Values Treated as Missing"
+        )
 
         zero_counts = (
             df[ZERO_AS_MISSING] == 0
@@ -717,41 +582,23 @@ elif page == "🔬 Data Analysis":
 
         st.dataframe(
             zero_table,
-            use_container_width=True
+            use_container_width=True,
+            hide_index=True
         )
-
 
     # --------------------------------------------------------
     # CORRELATION
     # --------------------------------------------------------
 
-    with tabs[2]:
+    with tab3:
 
         st.subheader(
-            "Correlation Heatmap"
-        )
-
-        fig, ax = plt.subplots(
-            figsize=(10, 7)
+            "Correlation with Diabetes Outcome"
         )
 
         correlation = (
             df[FEATURES + [TARGET]]
             .corr()
-        )
-
-        sns.heatmap(
-            correlation,
-            annot=True,
-            fmt=".2f",
-            cmap="coolwarm",
-            ax=ax
-        )
-
-        st.pyplot(fig)
-
-        st.subheader(
-            "Correlation with Outcome"
         )
 
         target_corr = (
@@ -769,35 +616,45 @@ elif page == "🔬 Data Analysis":
             use_container_width=True
         )
 
+        st.subheader(
+            "Correlation Matrix"
+        )
+
+        st.dataframe(
+            correlation.round(3),
+            use_container_width=True
+        )
+
+        st.info("""
+        Higher positive correlation means that the feature
+        tends to increase along with the diabetes outcome,
+        while negative correlation indicates an inverse
+        relationship.
+        """)
 
     # --------------------------------------------------------
     # FEATURE SELECTION
     # --------------------------------------------------------
 
-    with tabs[3]:
+    with tab4:
 
         st.subheader(
             "Selected Features"
         )
 
-        st.write("""
-        The project evaluates a reduced feature set along with
-        the complete feature set.
-        """)
-
-        selected_df = pd.DataFrame({
-            "Selected Features":
+        selected_table = pd.DataFrame({
+            "Selected Feature":
                 SELECTED_FEATURES
         })
 
         st.dataframe(
-            selected_df,
+            selected_table,
             use_container_width=True,
             hide_index=True
         )
 
         st.subheader(
-            "Selected vs All Features"
+            "Feature Count Comparison"
         )
 
         comparison = pd.DataFrame({
@@ -825,25 +682,18 @@ elif page == "🔬 Data Analysis":
 
 elif page == "📊 Model Comparison":
 
-    st.markdown(
-        '<div class="section-title">'
-        '📊 Comparative Model Evaluation'
-        '</div>',
-        unsafe_allow_html=True
+    st.title(
+        "📊 Comparative Model Evaluation"
     )
 
     st.write("""
-    Six classification algorithms are evaluated using both
-    the complete feature set and the selected feature set.
+    Each algorithm is evaluated using both the complete
+    feature set and the selected feature set.
     """)
-
-    # --------------------------------------------------------
-    # RESULTS TABLE
-    # --------------------------------------------------------
 
     display_df = results_df.copy()
 
-    percentage_columns = [
+    metric_columns = [
         "Accuracy",
         "Precision",
         "Recall",
@@ -852,10 +702,10 @@ elif page == "📊 Model Comparison":
         "Candidate Score"
     ]
 
-    for column in percentage_columns:
+    for col in metric_columns:
 
-        display_df[column] = (
-            display_df[column] * 100
+        display_df[col] = (
+            display_df[col] * 100
         ).round(2)
 
     st.dataframe(
@@ -866,63 +716,48 @@ elif page == "📊 Model Comparison":
 
     st.divider()
 
-    # --------------------------------------------------------
-    # BEST MODEL
-    # --------------------------------------------------------
+    st.subheader("🏆 Best Model")
 
     best = results_df.iloc[0]
 
-    st.subheader(
-        "🏆 Best Performing Experiment"
-    )
-
     c1, c2, c3, c4 = st.columns(4)
 
-    with c1:
+    c1.metric(
+        "Algorithm",
+        best["Algorithm"]
+    )
 
-        st.metric(
-            "Algorithm",
-            best["Algorithm"]
-        )
+    c2.metric(
+        "Feature Set",
+        best["Feature Set"]
+    )
 
-    with c2:
+    c3.metric(
+        "Accuracy",
+        f"{best['Accuracy'] * 100:.2f}%"
+    )
 
-        st.metric(
-            "Feature Set",
-            best["Feature Set"]
-        )
+    c4.metric(
+        "ROC-AUC",
+        f"{best['ROC-AUC'] * 100:.2f}%"
+    )
 
-    with c3:
-
-        st.metric(
-            "Accuracy",
-            f"{best['Accuracy'] * 100:.2f}%"
-        )
-
-    with c4:
-
-        st.metric(
-            "ROC-AUC",
-            f"{best['ROC-AUC'] * 100:.2f}%"
-        )
-
-    st.info(
+    st.success(
         f"""
-        Based on the composite evaluation score used in this
-        application, **{best['Algorithm']} with {best['Feature Set']}**
-        achieved the highest overall score.
+        Based on the Candidate Score, the best performing
+        experiment is **{best['Algorithm']} using
+        {best['Feature Set']}**.
         """
     )
 
     st.divider()
 
-    # --------------------------------------------------------
-    # METRIC SELECTION
-    # --------------------------------------------------------
+    st.subheader(
+        "Compare Models"
+    )
 
     metric = st.selectbox(
-        "Select Evaluation Metric",
-
+        "Select metric",
         [
             "Accuracy",
             "Precision",
@@ -932,100 +767,92 @@ elif page == "📊 Model Comparison":
         ]
     )
 
-    fig, ax = plt.subplots(
-        figsize=(12, 5)
+    chart_df = (
+        results_df[
+            [
+                "Algorithm",
+                "Feature Set",
+                metric
+            ]
+        ]
+        .copy()
     )
 
-    sns.barplot(
-        data=results_df,
-        x="Algorithm",
-        y=metric,
-        hue="Feature Set",
-        ax=ax
+    chart_df["Experiment"] = (
+        chart_df["Algorithm"]
+        + " - "
+        + chart_df["Feature Set"]
     )
 
-    ax.set_ylim(0, 1)
+    chart_df = chart_df.set_index(
+        "Experiment"
+    )[[metric]]
 
-    ax.set_ylabel(metric)
-
-    ax.set_xlabel("")
-
-    plt.xticks(
-        rotation=25
+    st.bar_chart(
+        chart_df
     )
-
-    plt.tight_layout()
-
-    st.pyplot(fig)
 
     st.divider()
 
-    # --------------------------------------------------------
-    # COMPARISON HEATMAP
-    # --------------------------------------------------------
-
     st.subheader(
-        "Model Performance Heatmap"
+        "Performance Comparison"
     )
 
-    heatmap_df = results_df.copy()
+    heatmap_table = results_df[
+        [
+            "Algorithm",
+            "Feature Set",
+            "Accuracy",
+            "Precision",
+            "Recall",
+            "F1 Score",
+            "ROC-AUC"
+        ]
+    ].copy()
 
-    heatmap_df["Experiment"] = (
-        heatmap_df["Algorithm"] +
-        " - " +
-        heatmap_df["Feature Set"]
+    heatmap_table[
+        [
+            "Accuracy",
+            "Precision",
+            "Recall",
+            "F1 Score",
+            "ROC-AUC"
+        ]
+    ] = (
+        heatmap_table[
+            [
+                "Accuracy",
+                "Precision",
+                "Recall",
+                "F1 Score",
+                "ROC-AUC"
+            ]
+        ] * 100
+    ).round(2)
+
+    st.dataframe(
+        heatmap_table,
+        use_container_width=True,
+        hide_index=True
     )
-
-    heatmap_df = heatmap_df.set_index(
-        "Experiment"
-    )[[
-        "Accuracy",
-        "Precision",
-        "Recall",
-        "F1 Score",
-        "ROC-AUC"
-    ]]
-
-    fig, ax = plt.subplots(
-        figsize=(10, 8)
-    )
-
-    sns.heatmap(
-        heatmap_df,
-        annot=True,
-        fmt=".3f",
-        cmap="YlGnBu",
-        ax=ax
-    )
-
-    plt.tight_layout()
-
-    st.pyplot(fig)
 
 
 # ============================================================
-# PREDICTION PAGE
+# DIABETES PREDICTION
 # ============================================================
 
 elif page == "🧪 Diabetes Prediction":
 
-    st.markdown(
-        '<div class="section-title">'
-        '🧪 Diabetes Risk Prediction'
-        '</div>',
-        unsafe_allow_html=True
+    st.title(
+        "🧪 Diabetes Prediction"
     )
 
     st.write("""
-    Enter the patient's information below to generate a
-    machine learning prediction.
+    Enter the patient information below to generate
+    a prediction using the selected machine learning model.
     """)
 
     st.divider()
-
-    # --------------------------------------------------------
-    # INPUTS
-    # --------------------------------------------------------
 
     col1, col2 = st.columns(2)
 
@@ -1092,16 +919,12 @@ elif page == "🧪 Diabetes Prediction":
 
     st.divider()
 
-    # --------------------------------------------------------
-    # MODEL SELECTION
-    # --------------------------------------------------------
+    col1, col2 = st.columns(2)
 
-    c1, c2 = st.columns(2)
+    with col1:
 
-    with c1:
-
-        selected_model = st.selectbox(
-            "Select Prediction Model",
+        model_name = st.selectbox(
+            "Prediction Model",
             [
                 "Random Forest",
                 "Logistic Regression",
@@ -1112,10 +935,10 @@ elif page == "🧪 Diabetes Prediction":
             ]
         )
 
-    with c2:
+    with col2:
 
-        selected_feature_set = st.selectbox(
-            "Select Feature Set",
+        feature_set = st.selectbox(
+            "Feature Set",
             [
                 "All Features",
                 "Selected Features"
@@ -1124,34 +947,24 @@ elif page == "🧪 Diabetes Prediction":
 
     st.divider()
 
-    predict_button = st.button(
+    if st.button(
         "🔍 Predict Diabetes",
         type="primary",
         use_container_width=True
-    )
-
-    # --------------------------------------------------------
-    # PREDICTION
-    # --------------------------------------------------------
-
-    if predict_button:
+    ):
 
         key = (
-            selected_feature_set +
+            feature_set +
             " | " +
-            selected_model
+            model_name
         )
 
-        model_information = (
-            trained_models[key]
-        )
+        model_info = trained_models[key]
 
-        pipeline = (
-            model_information["pipeline"]
-        )
+        pipeline = model_info["model"]
 
         model_features = (
-            model_information["features"]
+            model_info["features"]
         )
 
         input_data = pd.DataFrame({
@@ -1189,227 +1002,185 @@ elif page == "🧪 Diabetes Prediction":
             ]
         })
 
-        # Apply same zero-as-missing logic
-        for column in ZERO_AS_MISSING:
+        # Replace zero with NaN
+        for col in ZERO_AS_MISSING:
 
-            if input_data[column].iloc[0] == 0:
+            if input_data[col].iloc[0] == 0:
 
-                input_data[column] = np.nan
+                input_data[col] = np.nan
 
-        # Median imputation using training dataset medians
-        for column in ZERO_AS_MISSING:
+        # Median imputation
+        for col in ZERO_AS_MISSING:
 
-            if input_data[column].isna().any():
+            if input_data[col].isna().any():
 
-                input_data[column] = (
-                    input_data[column]
+                input_data[col] = (
+                    input_data[col]
                     .fillna(
-                        df_model[column].median()
+                        df_model[col].median()
                     )
                 )
 
-        input_features = (
-            input_data[model_features]
+        X_input = (
+            input_data[
+                model_features
+            ]
         )
 
-        prediction = pipeline.predict(
-            input_features
-        )[0]
+        prediction = (
+            pipeline.predict(
+                X_input
+            )[0]
+        )
 
         probability = (
             pipeline.predict_proba(
-                input_features
+                X_input
             )[0][1]
         )
 
         st.divider()
 
-        # ----------------------------------------------------
-        # RESULT
-        # ----------------------------------------------------
-
         if prediction == 1:
 
-            st.markdown(
-                f"""
-                <div class="positive">
-
-                <h2>⚠️ Diabetes Predicted</h2>
-
-                <h3>
-                Predicted Probability:
-                {probability * 100:.2f}%
-                </h3>
-
-                </div>
-                """,
-                unsafe_allow_html=True
+            st.error(
+                "⚠️ Diabetes Predicted"
             )
 
         else:
 
-            st.markdown(
-                f"""
-                <div class="negative">
-
-                <h2>✅ Diabetes Not Predicted</h2>
-
-                <h3>
-                Predicted Probability:
-                {probability * 100:.2f}%
-                </h3>
-
-                </div>
-                """,
-                unsafe_allow_html=True
+            st.success(
+                "✅ Diabetes Not Predicted"
             )
-
-        st.divider()
-
-        # Prediction details
 
         c1, c2, c3 = st.columns(3)
 
-        with c1:
+        c1.metric(
+            "Prediction",
+            "Diabetic"
+            if prediction == 1
+            else "Non-Diabetic"
+        )
 
-            st.metric(
-                "Prediction",
-                "Diabetic"
-                if prediction == 1
-                else "Non-Diabetic"
-            )
+        c2.metric(
+            "Probability",
+            f"{probability * 100:.2f}%"
+        )
 
-        with c2:
+        c3.metric(
+            "Model",
+            model_name
+        )
 
-            st.metric(
-                "Probability",
-                f"{probability * 100:.2f}%"
-            )
-
-        with c3:
-
-            st.metric(
-                "Model",
-                selected_model
-            )
+        st.progress(
+            float(probability)
+        )
 
         st.info("""
-        ⚠️ This prediction is intended for academic and
-        demonstration purposes only. It should not be considered
-        a medical diagnosis.
+        ⚠️ This prediction is intended for academic
+        demonstration purposes only and should not be
+        used as a medical diagnosis.
         """)
 
 
 # ============================================================
-# ABOUT PROJECT
+# ABOUT
 # ============================================================
 
 elif page == "ℹ️ About Project":
 
-    st.markdown(
-        '<div class="section-title">'
-        'ℹ️ About the Project'
-        '</div>',
-        unsafe_allow_html=True
+    st.title(
+        "ℹ️ About the Project"
     )
 
     st.write("""
     ### Diabetes Prediction Using Predictive Analytics
 
-    This project applies predictive analytics and machine
-    learning techniques to predict diabetes outcomes from
-    clinical and demographic attributes.
+    This project uses machine learning to predict diabetes
+    outcomes from clinical and demographic features.
 
-    The project follows a complete analytical workflow:
+    ### Analytical Workflow
 
-    1. Dataset understanding
-    2. Data preprocessing
-    3. Exploratory data analysis
-    4. Missing-value treatment
-    5. Correlation analysis
-    6. Multicollinearity analysis
-    7. Feature selection
-    8. Feature scaling
-    9. Model development
-    10. Comparative model evaluation
-    11. Final model selection
-    12. Diabetes prediction
+    **1. Dataset Understanding**
+
+    Understanding the variables, data types and target variable.
+
+    **2. Data Preprocessing**
+
+    Invalid zero values are treated as missing values and
+    median imputation is applied.
+
+    **3. Exploratory Data Analysis**
+
+    Descriptive statistics and target distribution are examined.
+
+    **4. Correlation Analysis**
+
+    Relationships between input variables and diabetes outcome
+    are analysed.
+
+    **5. Multicollinearity Analysis**
+
+    Feature relationships are evaluated before feature selection.
+
+    **6. Feature Selection**
+
+    A reduced feature set is compared against the complete
+    feature set.
+
+    **7. Feature Scaling**
+
+    StandardScaler is applied before model training.
+
+    **8. Model Development**
+
+    Multiple classification algorithms are trained.
+
+    **9. Comparative Evaluation**
+
+    Models are compared using:
+
+    • Accuracy  
+    • Precision  
+    • Recall  
+    • F1 Score  
+    • ROC-AUC
+
+    **10. Final Model Selection**
+
+    The highest Candidate Score is used to identify the
+    strongest model/feature-set combination.
     """)
 
     st.divider()
 
     st.subheader(
-        "Input Variables"
+        "Input Features"
     )
 
-    feature_description = pd.DataFrame({
+    feature_table = pd.DataFrame({
 
-        "Feature": [
-            "Pregnancies",
-            "Glucose",
-            "BloodPressure",
-            "SkinThickness",
-            "Insulin",
-            "BMI",
-            "DiabetesPedigreeFunction",
-            "Age"
-        ],
+        "Feature": FEATURES,
 
-        "Description": [
-            "Number of pregnancies",
-            "Plasma glucose concentration",
-            "Diastolic blood pressure",
-            "Triceps skin fold thickness",
-            "Serum insulin level",
-            "Body Mass Index",
-            "Diabetes pedigree function",
-            "Age in years"
+        "Role": [
+            "Input",
+            "Input",
+            "Input",
+            "Input",
+            "Input",
+            "Input",
+            "Input",
+            "Input"
         ]
     })
 
     st.dataframe(
-        feature_description,
+        feature_table,
         use_container_width=True,
         hide_index=True
     )
-
-    st.divider()
-
-    st.subheader(
-        "Machine Learning Algorithms"
-    )
-
-    algorithms = pd.DataFrame({
-
-        "Algorithm": [
-            "Logistic Regression",
-            "Decision Tree",
-            "Random Forest",
-            "KNN",
-            "SVM",
-            "Gaussian Naive Bayes"
-        ],
-
-        "Type": [
-            "Linear Classification",
-            "Tree-based Classification",
-            "Ensemble Classification",
-            "Distance-based Classification",
-            "Kernel-based Classification",
-            "Probabilistic Classification"
-        ]
-    })
-
-    st.dataframe(
-        algorithms,
-        use_container_width=True,
-        hide_index=True
-    )
-
-    st.divider()
 
     st.warning("""
-    This project is an academic predictive analytics system.
-    Predictions should not be used independently for medical
-    diagnosis or treatment decisions.
+    This application is an academic predictive analytics
+    project and is not intended for clinical diagnosis.
     """)
